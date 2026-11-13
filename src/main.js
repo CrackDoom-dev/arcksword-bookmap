@@ -321,9 +321,10 @@ function renderBookmap() {
 
   const interval = candles.length > 1 ? candles[1].time - candles[0].time : 60000;
   const cols = heatmapColumns;
-  const windowEnd = candles.at(-1).time + interval;
-  const histSpan = cols.length ? windowEnd - cols[0].time : 0;
+  const now = Date.now();
+  const histSpan = cols.length ? now - cols[0].time : 0;
   const windowSpan = Math.min(candles.length * interval, Math.max(histSpan + 2 * interval, 8 * interval));
+  const windowEnd = now + windowSpan * 0.03;
   const windowStart = windowEnd - windowSpan;
   const plotW = width - 66;
   const chartH = height * 0.8;
@@ -385,10 +386,10 @@ function renderBookmap() {
     ctx.fillText(formatNumber(price, shownDecimals()), plotW + 4, Math.min(chartH - 2, Math.max(11, y + 4)));
   }
 
-  const candleW = (interval / windowSpan) * plotW;
-  const bodyW = Math.max(1, candleW * 0.6);
   const volMax = Math.max(...vis.map((c) => c.volume), 1e-9);
   vis.forEach((c) => {
+    const candleW = (Math.max(0, Math.min(interval, now - c.time)) / windowSpan) * plotW;
+    const bodyW = Math.max(2, candleW * 0.7);
     const x = xOf(c.time) + candleW / 2;
     const color = c.close >= c.open ? bidColor : askColor;
     const barH = (c.volume / volMax) * (height - chartH - 8);
@@ -439,6 +440,7 @@ setInterval(() => {
   if (dirty.chart) { renderBookmap(); renderVolumeList(); dirty.chart = false; }
 }, 150);
 
+setInterval(() => { dirty.chart = true; }, 1000);
 addEventListener("resize", () => { dirty.chart = true; });
 
 function refreshCalibInfo() {
