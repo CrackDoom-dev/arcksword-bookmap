@@ -122,6 +122,7 @@ async function connectMarket(isReconnect = false) {
     const { payload, host } = await fetchKlinesWithFallback(currentSymbol, currentInterval);
     activeHost = host;
     pollDeep();
+    syncClock();
     candles = payload.map((k) => ({
       time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5],
     }));
@@ -156,7 +157,7 @@ async function connectMarket(isReconnect = false) {
       tradeTape.unshift({ time: payload.T, price: +payload.p, quantity, isSell });
       if (tradeTape.length > 60) tradeTape.pop();
       isSell ? (tapeFlow.sell += quantity) : (tapeFlow.buy += quantity);
-      dom.statLatency.textContent = Math.max(0, Date.now() - payload.E) + " ms";
+      dom.statLatency.textContent = Math.max(0, nowMs() - payload.E) + " ms";
       dirty.tape = true;
     } else {
       const k = payload.k;
@@ -174,6 +175,19 @@ async function connectMarket(isReconnect = false) {
 }
 
 // ---- Heatmap sampling: order book 500 level, diambil tiap 2 detik ----
+let serverOffset = 0;
+const nowMs = () => Date.now() + serverOffset;
+async function syncClock() {
+  try {
+    const t0 = Date.now();
+    const response = await fetch(`${activeHost.rest}/api/v3/time`);
+    const data = await response.json();
+    const t1 = Date.now();
+    if (data.serverTime) serverOffset = data.serverTime + (t1 - t0) / 2 - t1;
+  } catch (error) {}
+}
+setInterval(syncClock, 60000);
+
 let deepBook = null;
 const flatBook = (rows) => {
   const out = new Float64Array(rows.length * 2);
@@ -193,7 +207,7 @@ setInterval(() => {
   const src = deepBook || { bids: orderBookBids, asks: orderBookAsks };
   if (!src.bids.length || !src.asks.length) return;
   heatmapColumns.push({
-    time: Date.now(),
+    time: nowMs(),
     mid: (+src.bids[0][0] + +src.asks[0][0]) / 2,
     bids: flatBook(src.bids),
     asks: flatBook(src.asks),
@@ -283,7 +297,7 @@ function heatColor(t) {
 function candleRemaining() {
   if (candles.length < 2) return null;
   const interval = candles[1].time - candles[0].time;
-  return Math.max(0, candles.at(-1).time + interval - Date.now());
+  return Math.max(0, candles.at(-1).time + interval - nowMs());
 }
 function fmtClock(ms) {
   const t = Math.ceil(ms / 1000);
@@ -291,10 +305,6 @@ function fmtClock(ms) {
   const m = Math.floor((t % 3600) / 60);
   return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
 }
-setInterval(() => {
-  const remaining = candleRemaining();
-  dom.candleTimer.textContent = remaining === null ? "" : "candle baru " + fmtClock(remaining);
-}, 500);
 
 function renderBookmap() {
   const canvas = dom.bookmapCanvas;
@@ -321,7 +331,7 @@ function renderBookmap() {
 
   const interval = candles.length > 1 ? candles[1].time - candles[0].time : 60000;
   const cols = heatmapColumns;
-  const now = Date.now();
+  const now = nowMs();
   const histSpan = cols.length ? now - cols[0].time : 0;
   const windowSpan = Math.min(candles.length * interval, Math.max(histSpan + 2 * interval, 8 * interval));
   const windowEnd = now + windowSpan * 0.03;
@@ -420,6 +430,7 @@ function renderBookmap() {
   ctx.stroke();
   ctx.restore();
   const remaining = candleRemaining();
+  dom.candleTimer.textContent = remaining === null ? "" : "candle baru " + fmtClock(remaining);
   const boxH = remaining === null ? 16 : 30;
   const boxY = Math.min(chartH - boxH, Math.max(0, lastY - 8));
   ctx.fillStyle = priceColor;
