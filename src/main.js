@@ -1,11 +1,20 @@
 // Arcksword Bookmap Free
 // Sumber data: market data publik Binance (REST + WebSocket), tanpa delay buatan.
 
-const MARKET_HOSTS = [
-  { rest: "https://data-api.binance.vision", ws: "wss://data-stream.binance.vision" },
-  { rest: "https://api.binance.com", ws: "wss://stream.binance.com:9443" },
-  { rest: "https://api.binance.me", ws: "wss://stream.binance.me:9443" },
+// Spot (PAXG, BTC, dll)
+const SPOT_HOSTS = [
+  { kind: "spot", api: "/api/v3", rest: "https://data-api.binance.vision", ws: "wss://data-stream.binance.vision" },
+  { kind: "spot", api: "/api/v3", rest: "https://api.binance.com", ws: "wss://stream.binance.com:9443" },
+  { kind: "spot", api: "/api/v3", rest: "https://api.binance.me", ws: "wss://stream.binance.me:9443" },
 ];
+// USDS-M Futures (XAUUSDT = emas perpetual, XAGUSDT = perak perpetual)
+const FUTURES_HOSTS = [
+  { kind: "futures", api: "/fapi/v1", rest: "https://fapi.binance.com", ws: "wss://fstream.binance.com" },
+  { kind: "futures", api: "/fapi/v1", rest: "https://fapi1.binance.com", ws: "wss://fstream.binance.com" },
+  { kind: "futures", api: "/fapi/v1", rest: "https://fapi2.binance.com", ws: "wss://fstream.binance.com" },
+];
+const FUTURES_SYMBOLS = new Set(["xauusdt", "xagusdt"]);
+const hostsFor = (symbol) => (FUTURES_SYMBOLS.has(String(symbol).toLowerCase()) ? FUTURES_HOSTS : SPOT_HOSTS);
 
 const el = (id) => document.getElementById(id);
 const dom = {
@@ -47,10 +56,11 @@ function decimalPlacesForPrice(price) {
 }
 
 // ---- State ----
-let currentSymbol = "paxgusdt";
+let currentSymbol = "xauusdt";
 let currentInterval = "1m";
-let activeHost = MARKET_HOSTS[0];
-let socket = null;
+let activeHost = hostsFor(currentSymbol)[0];
+let sockets = [];
+let reconnectTimer = null;
 
 let candles = [];
 let orderBookBids = [];
@@ -79,10 +89,10 @@ const dirty = { book: false, tape: false, chart: false };
 // ---- Networking ----
 async function fetchKlinesWithFallback(symbol, interval) {
   let lastError;
-  for (const host of MARKET_HOSTS) {
+  for (const host of hostsFor(symbol)) {
     try {
       const response = await fetch(
-        `${host.rest}/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=80`
+        `${host.rest}${host.api}/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=80`
       );
       const payload = await response.json();
       if (!Array.isArray(payload)) throw new Error("simbol tidak valid");
@@ -100,10 +110,9 @@ async function fetchKlinesWithFallback(symbol, interval) {
 }
 
 async function connectMarket(isReconnect = false) {
-  if (socket) {
-    socket.onclose = null;
-    socket.close();
-  }
+  clearTimeout(reconnectTimer);
+  sockets.forEach((ws) => { ws.onclose = null; ws.close(); });
+  sockets = [];
   orderBookBids = [];
   orderBookAsks = [];
   if (!isReconnect) {
@@ -132,46 +141,66 @@ async function connectMarket(isReconnect = false) {
     return;
   }
 
-  const streams = `${currentSymbol}@depth20@100ms/${currentSymbol}@trade/${currentSymbol}@kline_${currentInterval}`;
-  socket = new WebSocket(`${activeHost.ws}/stream?streams=${streams}`);
+  const sym = currentSymbol;
+  let urls;
+  if (activeHost.kind === "futures") {
+    // Binance Futures memisah WebSocket: depth di /public, trade & kline di /market
+    urls = [
+      `${activeHost.ws}/public/stream?streams=${sym}@depth20@100ms`,
+      `${activeHost.ws}/market/stream?streams=${sym}@aggTrade/${sym}@kline_${currentInterval}`,
+    ];
+  } else {
+    urls = [`${activeHost.ws}/stream?streams=${sym}@depth20@100ms/${sym}@trade/${sym}@kline_${currentInterval}`];
+  }
 
-  socket.onopen = () => {
-    dom.status.className = "status status-on";
-    dom.status.textContent = "langsung";
-  };
-  socket.onclose = () => {
-    dom.status.className = "status status-off";
-    dom.status.textContent = "terputus, mencoba lagi";
-    setTimeout(() => connectMarket(true), 3000);
-  };
-  socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    const payload = message.data;
-    if (message.stream.includes("@depth")) {
-      orderBookBids = payload.bids;
-      orderBookAsks = payload.asks;
-      dirty.book = true;
-    } else if (message.stream.includes("@trade")) {
-      const quantity = +payload.q;
-      const isSell = payload.m;
-      tradeTape.unshift({ time: payload.T, price: +payload.p, quantity, isSell });
-      if (tradeTape.length > 60) tradeTape.pop();
-      isSell ? (tapeFlow.sell += quantity) : (tapeFlow.buy += quantity);
-      dom.statLatency.textContent = Math.max(0, nowMs() - payload.E) + " ms";
-      dirty.tape = true;
-    } else {
-      const k = payload.k;
-      const updated = { time: k.t, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
-      const last = candles.at(-1);
-      if (last && last.time === updated.time) {
-        candles[candles.length - 1] = updated;
-      } else {
-        candles.push(updated);
-        if (candles.length > 80) candles.shift();
+  let openCount = 0;
+  sockets = urls.map((url) => {
+    const ws = new WebSocket(url);
+    ws.onopen = () => {
+      openCount++;
+      if (openCount === urls.length) {
+        dom.status.className = "status status-on";
+        dom.status.textContent = "langsung";
       }
-      dirty.chart = true;
+    };
+    ws.onclose = () => {
+      dom.status.className = "status status-off";
+      dom.status.textContent = "terputus, mencoba lagi";
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => connectMarket(true), 3000);
+    };
+    ws.onmessage = handleSocketMessage;
+    return ws;
+  });
+}
+
+function handleSocketMessage(event) {
+  const message = JSON.parse(event.data);
+  const payload = message.data;
+  if (message.stream.includes("@depth")) {
+    orderBookBids = payload.bids ?? payload.b ?? [];
+    orderBookAsks = payload.asks ?? payload.a ?? [];
+    dirty.book = true;
+  } else if (message.stream.includes("@trade") || message.stream.includes("@aggTrade")) {
+    const quantity = +payload.q;
+    const isSell = payload.m;
+    tradeTape.unshift({ time: payload.T, price: +payload.p, quantity, isSell });
+    if (tradeTape.length > 60) tradeTape.pop();
+    isSell ? (tapeFlow.sell += quantity) : (tapeFlow.buy += quantity);
+    dom.statLatency.textContent = Math.max(0, nowMs() - payload.E) + " ms";
+    dirty.tape = true;
+  } else {
+    const k = payload.k;
+    const updated = { time: k.t, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
+    const last = candles.at(-1);
+    if (last && last.time === updated.time) {
+      candles[candles.length - 1] = updated;
+    } else {
+      candles.push(updated);
+      if (candles.length > 80) candles.shift();
     }
-  };
+    dirty.chart = true;
+  }
 }
 
 // ---- Heatmap sampling: order book 500 level, diambil tiap 2 detik ----
@@ -180,7 +209,7 @@ const nowMs = () => Date.now() + serverOffset;
 async function syncClock() {
   try {
     const t0 = Date.now();
-    const response = await fetch(`${activeHost.rest}/api/v3/time`);
+    const response = await fetch(`${activeHost.rest}${activeHost.api}/time`);
     const data = await response.json();
     const t1 = Date.now();
     if (data.serverTime) serverOffset = data.serverTime + (t1 - t0) / 2 - t1;
@@ -197,7 +226,7 @@ const flatBook = (rows) => {
 async function pollDeep() {
   const symbol = currentSymbol;
   try {
-    const response = await fetch(`${activeHost.rest}/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=500`);
+    const response = await fetch(`${activeHost.rest}${activeHost.api}/depth?symbol=${symbol.toUpperCase()}&limit=500`);
     const data = await response.json();
     if (symbol === currentSymbol && data.bids && data.asks) deepBook = { bids: data.bids, asks: data.asks };
   } catch (error) {}

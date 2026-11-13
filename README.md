@@ -18,8 +18,13 @@ Vite akan menampilkan alamat seperti `http://localhost:5173`, buka di browser.
 
 - Data diambil langsung dari market data publik Binance (REST untuk candle awal,
   WebSocket untuk order book, transaksi, dan update candle). Tidak ada delay buatan.
-- Simbol default PAXG/USDT (token berjaminan emas fisik), bisa diganti ke simbol lain
-  lewat kolom "simbol lain" di bagian atas.
+- Simbol default XAUUSDT (kontrak perpetual emas di Binance Futures, harganya mengikuti emas spot
+  sehingga paling dekat dengan XAUUSD di MT5). PAXG/USDT tetap ada di dropdown. Simbol futures lain
+  (mis. xagusdt) bisa dimuat lewat kolom "simbol lain" setelah ditambahkan ke FUTURES_SYMBOLS di src/main.js.
+- Untuk simbol futures, aplikasi memakai dua WebSocket (/public untuk depth, /market untuk trade dan candle)
+  sesuai aturan URL baru Binance Futures.
+- Selisih kecil dengan harga MT5 tetap mungkin ada (funding, basis, kuotasi broker). Pakai kolom "Harga di MT5"
+  untuk kalibrasi offset.
 - Heatmap menunjukkan ketebalan order resting (bid + ask) di tiap level harga seiring
   waktu, disampel tiap 1 detik dari snapshot order book 20 level. Karena hanya 20 level
   per sisi yang tersedia dari API publik, heatmap paling informatif untuk area harga
