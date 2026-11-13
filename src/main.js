@@ -22,7 +22,8 @@ const dom = {
   orderBookList: el("orderBookList"),
   tapeList: el("tapeList"),
   volumeList: el("volumeList"),
-  heatmapCanvas: el("heatmapCanvas"),
+  candleCanvas: el("candleCanvas"),
+  bookmapCanvas: el("bookmapCanvas"),
   mt5Price: el("mt5Price"),
   calibrate: el("calibrate"),
   resetOffset: el("resetOffset"),
@@ -70,8 +71,8 @@ const shownDecimals = () => (offsetSetAt ? brokerDigits : priceDecimals);
 const fmtAdj = (price) => formatNumber(adj(price), shownDecimals());
 const rawLastPrice = () => (tradeTape[0] ? tradeTape[0].price : candles.length ? candles.at(-1).close : 0);
 
-const MAX_HEATMAP_COLUMNS = 150;
-const HEATMAP_ROWS = 60;
+const MAX_HEATMAP_COLUMNS = 450;
+const HEATMAP_ROWS = 80;
 
 const dirty = { book: false, tape: false, chart: false };
 
@@ -110,6 +111,7 @@ async function connectMarket(isReconnect = false) {
     tradeTape = [];
     tapeFlow = { buy: 0, sell: 0 };
     heatmapColumns = [];
+    deepBook = null;
     dirty.tape = true;
   }
 
@@ -119,6 +121,7 @@ async function connectMarket(isReconnect = false) {
   try {
     const { payload, host } = await fetchKlinesWithFallback(currentSymbol, currentInterval);
     activeHost = host;
+    pollDeep();
     candles = payload.map((k) => ({
       time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5],
     }));
@@ -170,17 +173,34 @@ async function connectMarket(isReconnect = false) {
   };
 }
 
-// ---- Heatmap sampling (independent of depth update frequency) ----
+// ---- Heatmap sampling: order book 500 level, diambil tiap 2 detik ----
+let deepBook = null;
+const flatBook = (rows) => {
+  const out = new Float64Array(rows.length * 2);
+  rows.forEach(([p, q], i) => { out[2 * i] = +p; out[2 * i + 1] = +q; });
+  return out;
+};
+async function pollDeep() {
+  const symbol = currentSymbol;
+  try {
+    const response = await fetch(`${activeHost.rest}/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=500`);
+    const data = await response.json();
+    if (symbol === currentSymbol && data.bids && data.asks) deepBook = { bids: data.bids, asks: data.asks };
+  } catch (error) {}
+}
+setInterval(pollDeep, 2000);
 setInterval(() => {
-  if (!orderBookBids.length && !orderBookAsks.length) return;
+  const src = deepBook || { bids: orderBookBids, asks: orderBookAsks };
+  if (!src.bids.length || !src.asks.length) return;
   heatmapColumns.push({
     time: Date.now(),
-    bids: orderBookBids.map(([p, q]) => [+p, +q]),
-    asks: orderBookAsks.map(([p, q]) => [+p, +q]),
+    mid: (+src.bids[0][0] + +src.asks[0][0]) / 2,
+    bids: flatBook(src.bids),
+    asks: flatBook(src.asks),
   });
   if (heatmapColumns.length > MAX_HEATMAP_COLUMNS) heatmapColumns.shift();
   dirty.chart = true;
-}, 1000);
+}, 2000);
 
 // ---- Rendering ----
 function renderOrderBook() {
@@ -260,8 +280,91 @@ function heatColor(t) {
   return `rgb(${last.join(",")})`;
 }
 
+function renderBookmap() {
+  const canvas = dom.bookmapCanvas;
+  const ratio = devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+  const style = getComputedStyle(document.documentElement);
+  const mutedColor = style.getPropertyValue("--muted");
+  ctx.fillStyle = "#0a0e16";
+  ctx.fillRect(0, 0, width, height);
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.fillStyle = mutedColor;
+  const cols = heatmapColumns;
+  if (cols.length < 2) {
+    ctx.fillText("mengumpulkan data order book...", 10, 20);
+    return;
+  }
+
+  const plotW = width - 66;
+  const mids = cols.map((c) => adj(c.mid));
+  const lo = Math.min(...mids);
+  const hi = Math.max(...mids);
+  const midNow = mids.at(-1);
+  const half = Math.max((hi - lo) / 2 + midNow * 0.0002, midNow * 0.0006);
+  const pLow = (hi + lo) / 2 - half;
+  const pHigh = (hi + lo) / 2 + half;
+  const ROWS = HEATMAP_ROWS;
+  const rowH = height / ROWS;
+  const toY = (p) => height - ((p - pLow) / (pHigh - pLow)) * height;
+  const t0 = cols[0].time;
+  const span = Math.max(60000, cols.at(-1).time - t0 + 2000);
+  const colW = (2000 / span) * plotW + 1;
+
+  const grid = cols.map((col) => {
+    const rows = new Float32Array(ROWS);
+    for (const book of [col.bids, col.asks]) {
+      for (let i = 0; i < book.length; i += 2) {
+        const p = adj(book[i]);
+        if (p < pLow || p >= pHigh) continue;
+        rows[Math.floor(((p - pLow) / (pHigh - pLow)) * ROWS)] += book[i + 1];
+      }
+    }
+    return rows;
+  });
+  const values = [];
+  grid.forEach((rows) => rows.forEach((v) => { if (v > 0) values.push(v); }));
+  values.sort((x, y) => x - y);
+  const maxQty = values.length ? values[Math.floor(values.length * 0.97)] || values.at(-1) : 1;
+
+  grid.forEach((rows, ci) => {
+    const x = ((cols[ci].time - t0) / span) * plotW;
+    rows.forEach((qty, r) => {
+      if (qty <= 0) return;
+      const intensity = Math.min(1, Math.log1p(qty) / Math.log1p(maxQty));
+      ctx.fillStyle = heatColor(intensity);
+      ctx.fillRect(x, height - (r + 1) * rowH, colW, rowH + 1);
+    });
+  });
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  cols.forEach((col, i) => {
+    const x = ((col.time - t0) / span) * plotW + colW / 2;
+    const y = toY(mids[i]);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = mutedColor;
+  for (let i = 0; i <= 4; i++) {
+    const price = pLow + ((pHigh - pLow) * i) / 4;
+    ctx.fillText(formatNumber(price, shownDecimals()), plotW + 4, Math.min(height - 3, Math.max(11, toY(price) + 4)));
+  }
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(formatNumber(midNow, shownDecimals()), plotW + 4, Math.min(height - 3, Math.max(11, toY(midNow) + 4)));
+  ctx.fillStyle = mutedColor;
+  ctx.fillText(`${Math.round(span / 1000)} dtk`, 6, 14);
+}
+
 function renderChart() {
-  const canvas = dom.heatmapCanvas;
+  const canvas = dom.candleCanvas;
   const ratio = devicePixelRatio || 1;
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
@@ -294,46 +397,6 @@ function renderChart() {
   const columnWidth = (width - rightPad) / visibleCount;
   const priceToY = (price) =>
     chartHeight - ((price - priceLow) / (priceHigh - priceLow || 1)) * (chartHeight - 8) + 4;
-
-  // --- heatmap layer: aligned to the same time window as the visible candles ---
-  const windowStart = visibleCandles[0].time;
-  const windowEnd = Date.now();
-  const visibleHeatmap = heatmapColumns.filter((col) => col.time >= windowStart);
-  if (visibleHeatmap.length) {
-    let maxRowQty = 1e-9;
-    const rowHeight = chartHeight / HEATMAP_ROWS;
-    const rowQtyFor = (col, rowIndex) => {
-      const rowTop = priceLow + ((priceHigh - priceLow) * (rowIndex + 1)) / HEATMAP_ROWS;
-      const rowBottom = priceLow + ((priceHigh - priceLow) * rowIndex) / HEATMAP_ROWS;
-      let qty = 0;
-      for (const [p, q] of col.bids) { const pp = adj(p); if (pp >= rowBottom && pp < rowTop) qty += q; }
-      for (const [p, q] of col.asks) { const pp = adj(p); if (pp >= rowBottom && pp < rowTop) qty += q; }
-      return qty;
-    };
-    const grid = visibleHeatmap.map((col) => {
-      const rows = new Array(HEATMAP_ROWS);
-      for (let r = 0; r < HEATMAP_ROWS; r++) {
-        rows[r] = rowQtyFor(col, r);
-        if (rows[r] > maxRowQty) maxRowQty = rows[r];
-      }
-      return rows;
-    });
-    const interval = candles.length > 1 ? candles[1].time - candles[0].time : 60000;
-    const windowSpan = visibleCandles.length * interval;
-    const plotWidth = width - rightPad;
-    const colSpan = (1000 / windowSpan) * plotWidth + 1;
-    grid.forEach((rows, colIndex) => {
-      const x = ((visibleHeatmap[colIndex].time - windowStart) / windowSpan) * plotWidth;
-      rows.forEach((qty, rowIndex) => {
-        if (qty <= 0) return;
-        const intensity = Math.log1p(qty) / Math.log1p(maxRowQty || 1);
-        ctx.fillStyle = heatColor(intensity);
-        const yTop = priceToY(priceLow + ((priceHigh - priceLow) * (rowIndex + 1)) / HEATMAP_ROWS);
-        const yBottom = priceToY(priceLow + ((priceHigh - priceLow) * rowIndex) / HEATMAP_ROWS);
-        ctx.fillRect(x, yTop, colSpan, yBottom - yTop + 1);
-      });
-    });
-  }
 
   // --- price grid labels ---
   ctx.strokeStyle = lineColor;
@@ -374,7 +437,7 @@ function renderChart() {
 setInterval(() => {
   if (dirty.book) { renderOrderBook(); dirty.book = false; }
   if (dirty.tape) { renderTape(); dirty.tape = false; }
-  if (dirty.chart) { renderChart(); renderVolumeList(); dirty.chart = false; }
+  if (dirty.chart) { renderBookmap(); renderChart(); renderVolumeList(); dirty.chart = false; }
 }, 150);
 
 addEventListener("resize", () => { dirty.chart = true; });

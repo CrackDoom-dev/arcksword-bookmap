@@ -91,10 +91,11 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-areas: "chart chart" "book tape" "volume volume";
+  grid-template-areas: "chart chart" "candle candle" "book tape" "volume volume";
   gap: 8px;
 }
 .area-chart { grid-area: chart; }
+.area-candle { grid-area: candle; }
 .area-book { grid-area: book; }
 .area-tape { grid-area: tape; }
 .area-volume { grid-area: volume; }
@@ -108,7 +109,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 }
 .panel h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
 
-#heatmapCanvas { width: 100%; height: 300px; display: block; }
+#bookmapCanvas { width: 100%; height: 340px; display: block; }
+#candleCanvas { width: 100%; height: 220px; display: block; }
 
 .book-row, .tape-row, .volume-row {
   position: relative;
@@ -153,9 +155,10 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   .stat-main .stat-value { font-size: 24px; }
   .layout {
     grid-template-columns: minmax(0, 1fr) 290px 290px;
-    grid-template-areas: "chart book tape" "volume book tape";
+    grid-template-areas: "chart book tape" "candle book tape" "volume book tape";
     align-items: start;
   }
-  #heatmapCanvas { height: clamp(380px, calc(100vh - 360px), 640px); }
+  #bookmapCanvas { height: clamp(360px, calc(100vh - 480px), 560px); }
+  #candleCanvas { height: 240px; }
   #tapeList { max-height: 560px; }
 }
