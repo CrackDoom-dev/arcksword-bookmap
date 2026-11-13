@@ -26,3 +26,5 @@ Vite akan menampilkan alamat seperti `http://localhost:5173`, buka di browser.
   dekat best bid/ask, bukan seluruh depth pasar.
 - Nama "Arcksword Bookmap Free" adalah penamaan proyek pribadi, tidak berafiliasi
   dengan produk komersial manapun yang memakai nama serupa.
+
+## akses here 👉 https://crackdoom-dev.github.io/arcksword-bookmap/
