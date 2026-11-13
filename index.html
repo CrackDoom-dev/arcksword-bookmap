@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arcksword Bookmap Free</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Arcksword<span>Bookmap Free</span></div>
+    <div id="connectionStatus" class="status status-off">terputus</div>
+    <div class="controls">
+      <select id="symbolSelect" aria-label="Pasangan">
+        <option value="paxgusdt">PAXG/USDT (emas fisik)</option>
+        <option value="btcusdt">BTC/USDT</option>
+        <option value="ethusdt">ETH/USDT</option>
+        <option value="solusdt">SOL/USDT</option>
+      </select>
+      <select id="intervalSelect" aria-label="Timeframe">
+        <option>1m</option><option>5m</option><option>15m</option><option>1h</option>
+      </select>
+      <input id="customSymbol" placeholder="simbol lain, mis. xrpusdt" aria-label="Simbol kustom" />
+      <button id="loadSymbol">Muat</button>
+    </div>
+  </header>
+
+  <section class="calib">
+    <input id="mt5Price" type="number" step="0.001" inputmode="decimal" placeholder="Harga di MT5" aria-label="Harga MT5" />
+    <select id="brokerDigits" aria-label="Digit broker">
+      <option value="2">2 digit</option>
+      <option value="3">3 digit</option>
+    </select>
+    <button id="calibrate" class="primary">Kalibrasi</button>
+    <button id="resetOffset">Reset</button>
+    <span id="calibInfo" class="calib-info mono">belum dikalibrasi</span>
+  </section>
+
+  <section class="stat-grid">
+    <div class="stat-card stat-main">
+      <span class="stat-label">Harga terakhir</span>
+      <span id="statLastPrice" class="stat-value mono">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Spread</span>
+      <span id="statSpread" class="stat-value mono">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Volume candle</span>
+      <span id="statVolume" class="stat-value mono">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Tekanan beli</span>
+      <span id="statBuyPressure" class="stat-value mono">0%</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Latensi</span>
+      <span id="statLatency" class="stat-value mono">0 ms</span>
+    </div>
+  </section>
+
+  <main class="layout">
+    <div class="panel area-chart">
+      <h2>Heatmap likuiditas + harga</h2>
+      <canvas id="heatmapCanvas"></canvas>
+    </div>
+    <div class="panel area-book">
+      <h2>Order book</h2>
+      <div id="orderBookList"></div>
+    </div>
+    <div class="panel area-tape">
+      <h2>Order eksekusi</h2>
+      <div id="tapeList"></div>
+    </div>
+    <div class="panel area-volume">
+      <h2>Volume per candle</h2>
+      <div id="volumeList"></div>
+    </div>
+  </main>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

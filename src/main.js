@@ -1,0 +1,430 @@
+// Arcksword Bookmap Free
+// Sumber data: market data publik Binance (REST + WebSocket), tanpa delay buatan.
+
+const MARKET_HOSTS = [
+  { rest: "https://data-api.binance.vision", ws: "wss://data-stream.binance.vision" },
+  { rest: "https://api.binance.com", ws: "wss://stream.binance.com:9443" },
+  { rest: "https://api.binance.me", ws: "wss://stream.binance.me:9443" },
+];
+
+const el = (id) => document.getElementById(id);
+const dom = {
+  symbolSelect: el("symbolSelect"),
+  customSymbol: el("customSymbol"),
+  loadButton: el("loadSymbol"),
+  intervalSelect: el("intervalSelect"),
+  status: el("connectionStatus"),
+  statLastPrice: el("statLastPrice"),
+  statSpread: el("statSpread"),
+  statVolume: el("statVolume"),
+  statBuyPressure: el("statBuyPressure"),
+  statLatency: el("statLatency"),
+  orderBookList: el("orderBookList"),
+  tapeList: el("tapeList"),
+  volumeList: el("volumeList"),
+  heatmapCanvas: el("heatmapCanvas"),
+  mt5Price: el("mt5Price"),
+  calibrate: el("calibrate"),
+  resetOffset: el("resetOffset"),
+  calibInfo: el("calibInfo"),
+  brokerDigits: el("brokerDigits"),
+};
+
+function formatNumber(value, decimals) {
+  return Number(value).toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function decimalPlacesForPrice(price) {
+  const p = +price;
+  if (p >= 1000) return 2;
+  if (p >= 1) return 3;
+  if (p >= 0.1) return 4;
+  return 6;
+}
+
+// ---- State ----
+let currentSymbol = "paxgusdt";
+let currentInterval = "1m";
+let activeHost = MARKET_HOSTS[0];
+let socket = null;
+
+let candles = [];
+let orderBookBids = [];
+let orderBookAsks = [];
+let tradeTape = [];
+let tapeFlow = { buy: 0, sell: 0 };
+let heatmapColumns = []; // { time, bids:[[price,qty]], asks:[[price,qty]] }
+let priceDecimals = 2;
+
+let priceOffset = 0;
+let offsetSetAt = 0;
+const adj = (price) => +price + priceOffset;
+let brokerDigits = 3;
+try { brokerDigits = +localStorage.getItem("brokerDigits") === 2 ? 2 : 3; } catch (e) {}
+dom.brokerDigits.value = String(brokerDigits);
+dom.mt5Price.step = String(10 ** -brokerDigits);
+const shownDecimals = () => (offsetSetAt ? brokerDigits : priceDecimals);
+const fmtAdj = (price) => formatNumber(adj(price), shownDecimals());
+const rawLastPrice = () => (tradeTape[0] ? tradeTape[0].price : candles.length ? candles.at(-1).close : 0);
+
+const MAX_HEATMAP_COLUMNS = 150;
+const HEATMAP_ROWS = 60;
+
+const dirty = { book: false, tape: false, chart: false };
+
+// ---- Networking ----
+async function fetchKlinesWithFallback(symbol, interval) {
+  let lastError;
+  for (const host of MARKET_HOSTS) {
+    try {
+      const response = await fetch(
+        `${host.rest}/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=80`
+      );
+      const payload = await response.json();
+      if (!Array.isArray(payload)) throw new Error("simbol tidak valid");
+      return { payload, host };
+    } catch (error) {
+      lastError = error;
+      if (error.message === "simbol tidak valid") break;
+    }
+  }
+  const message =
+    lastError && lastError.message === "Failed to fetch"
+      ? "semua server market data tidak terjangkau (kemungkinan diblokir jaringan)"
+      : lastError?.message ?? "gagal memuat data";
+  throw new Error(message);
+}
+
+async function connectMarket(isReconnect = false) {
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+  }
+  orderBookBids = [];
+  orderBookAsks = [];
+  if (!isReconnect) {
+    candles = [];
+    tradeTape = [];
+    tapeFlow = { buy: 0, sell: 0 };
+    heatmapColumns = [];
+    dirty.tape = true;
+  }
+
+  dom.status.className = "status status-off";
+  dom.status.textContent = "menghubungkan";
+
+  try {
+    const { payload, host } = await fetchKlinesWithFallback(currentSymbol, currentInterval);
+    activeHost = host;
+    candles = payload.map((k) => ({
+      time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5],
+    }));
+    priceDecimals = decimalPlacesForPrice(candles.at(-1).close);
+  } catch (error) {
+    dom.status.textContent = "gagal: " + error.message;
+    return;
+  }
+
+  const streams = `${currentSymbol}@depth20@100ms/${currentSymbol}@trade/${currentSymbol}@kline_${currentInterval}`;
+  socket = new WebSocket(`${activeHost.ws}/stream?streams=${streams}`);
+
+  socket.onopen = () => {
+    dom.status.className = "status status-on";
+    dom.status.textContent = "langsung";
+  };
+  socket.onclose = () => {
+    dom.status.className = "status status-off";
+    dom.status.textContent = "terputus, mencoba lagi";
+    setTimeout(() => connectMarket(true), 3000);
+  };
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    const payload = message.data;
+    if (message.stream.includes("@depth")) {
+      orderBookBids = payload.bids;
+      orderBookAsks = payload.asks;
+      dirty.book = true;
+    } else if (message.stream.includes("@trade")) {
+      const quantity = +payload.q;
+      const isSell = payload.m;
+      tradeTape.unshift({ time: payload.T, price: +payload.p, quantity, isSell });
+      if (tradeTape.length > 60) tradeTape.pop();
+      isSell ? (tapeFlow.sell += quantity) : (tapeFlow.buy += quantity);
+      dom.statLatency.textContent = Math.max(0, Date.now() - payload.E) + " ms";
+      dirty.tape = true;
+    } else {
+      const k = payload.k;
+      const updated = { time: k.t, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
+      const last = candles.at(-1);
+      if (last && last.time === updated.time) {
+        candles[candles.length - 1] = updated;
+      } else {
+        candles.push(updated);
+        if (candles.length > 80) candles.shift();
+      }
+      dirty.chart = true;
+    }
+  };
+}
+
+// ---- Heatmap sampling (independent of depth update frequency) ----
+setInterval(() => {
+  if (!orderBookBids.length && !orderBookAsks.length) return;
+  heatmapColumns.push({
+    time: Date.now(),
+    bids: orderBookBids.map(([p, q]) => [+p, +q]),
+    asks: orderBookAsks.map(([p, q]) => [+p, +q]),
+  });
+  if (heatmapColumns.length > MAX_HEATMAP_COLUMNS) heatmapColumns.shift();
+  dirty.chart = true;
+}, 1000);
+
+// ---- Rendering ----
+function renderOrderBook() {
+  const asksTop = orderBookAsks.slice(0, 10).reverse();
+  const bidsTop = orderBookBids.slice(0, 10);
+  const maxQty = Math.max(
+    ...orderBookAsks.slice(0, 10).map((x) => +x[1]),
+    ...bidsTop.map((x) => +x[1]),
+    1e-9
+  );
+  const row = (entry, side) =>
+    `<div class="book-row ${side} mono">` +
+    `<span class="depth-bar" style="width:${((+entry[1] / maxQty) * 100).toFixed(1)}%"></span>` +
+    `<span>${fmtAdj(entry[0])}</span>` +
+    `<span>${formatNumber(entry[1], 4)}</span></div>`;
+
+  const bestBid = +(bidsTop[0] || [0])[0];
+  const bestAsk = +(orderBookAsks[0] || [0])[0];
+  dom.orderBookList.innerHTML =
+    asksTop.map((e) => row(e, "ask")).join("") +
+    `<div class="book-mid mono"><b>${candles.length ? fmtAdj(candles.at(-1).close) : "0"}</b></div>` +
+    bidsTop.map((e) => row(e, "bid")).join("");
+  dom.statSpread.textContent = bestAsk && bestBid ? formatNumber(bestAsk - bestBid, priceDecimals) : "0";
+}
+
+function renderTape() {
+  dom.tapeList.innerHTML = tradeTape
+    .slice(0, 22)
+    .map((t) => {
+      const time = new Date(t.time).toLocaleTimeString("id-ID", { hour12: false });
+      return `<div class="tape-row mono ${t.isSell ? "sell" : "buy"}">` +
+        `<span>${time}</span><span>${fmtAdj(t.price)}</span>` +
+        `<span>${formatNumber(t.quantity, 4)}</span></div>`;
+    })
+    .join("");
+  const total = tapeFlow.buy + tapeFlow.sell;
+  dom.statBuyPressure.textContent = total ? Math.round((tapeFlow.buy / total) * 100) + "%" : "0%";
+  if (tradeTape[0]) dom.statLastPrice.textContent = fmtAdj(tradeTape[0].price);
+}
+
+function renderVolumeList() {
+  dom.volumeList.innerHTML = candles
+    .slice(-14)
+    .reverse()
+    .map((c) => {
+      const up = c.close >= c.open;
+      const time = new Date(c.time).toLocaleTimeString("id-ID", { hour12: false, hour: "2-digit", minute: "2-digit" });
+      return `<div class="volume-row mono ${up ? "buy" : "sell"}">` +
+        `<span>${time}</span><span>${fmtAdj(c.close)}</span>` +
+        `<span>${formatNumber(c.volume, 2)}</span></div>`;
+    })
+    .join("");
+  if (candles.length) dom.statVolume.textContent = formatNumber(candles.at(-1).volume, 2);
+}
+
+const HEAT_STOPS = [
+  [0.0, [10, 14, 25]],
+  [0.18, [24, 44, 95]],
+  [0.4, [10, 120, 180]],
+  [0.6, [30, 190, 150]],
+  [0.78, [225, 195, 45]],
+  [1.0, [225, 70, 50]],
+];
+function heatColor(t) {
+  for (let i = 0; i < HEAT_STOPS.length - 1; i++) {
+    const [t0, c0] = HEAT_STOPS[i];
+    const [t1, c1] = HEAT_STOPS[i + 1];
+    if (t >= t0 && t <= t1) {
+      const f = (t - t0) / (t1 - t0 || 1);
+      const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
+      const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
+      const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  const last = HEAT_STOPS.at(-1)[1];
+  return `rgb(${last.join(",")})`;
+}
+
+function renderChart() {
+  const canvas = dom.heatmapCanvas;
+  const ratio = devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+
+  const style = getComputedStyle(document.documentElement);
+  const bidColor = style.getPropertyValue("--bid");
+  const askColor = style.getPropertyValue("--ask");
+  const lineColor = style.getPropertyValue("--line");
+  const mutedColor = style.getPropertyValue("--muted");
+
+  const visibleCount = Math.min(candles.length, Math.floor(width / 8));
+  const visibleCandles = candles.slice(-visibleCount).map((c) => ({
+    ...c,
+    open: adj(c.open),
+    high: adj(c.high),
+    low: adj(c.low),
+    close: adj(c.close),
+  }));
+  if (!visibleCandles.length) return;
+
+  const priceHigh = Math.max(...visibleCandles.map((c) => c.high));
+  const priceLow = Math.min(...visibleCandles.map((c) => c.low));
+  const volumeMax = Math.max(...visibleCandles.map((c) => c.volume));
+  const chartHeight = height * 0.72;
+  const rightPad = 66;
+  const columnWidth = (width - rightPad) / visibleCount;
+  const priceToY = (price) =>
+    chartHeight - ((price - priceLow) / (priceHigh - priceLow || 1)) * (chartHeight - 8) + 4;
+
+  // --- heatmap layer: aligned to the same time window as the visible candles ---
+  const windowStart = visibleCandles[0].time;
+  const windowEnd = Date.now();
+  const visibleHeatmap = heatmapColumns.filter((col) => col.time >= windowStart);
+  if (visibleHeatmap.length) {
+    let maxRowQty = 1e-9;
+    const rowHeight = chartHeight / HEATMAP_ROWS;
+    const rowQtyFor = (col, rowIndex) => {
+      const rowTop = priceLow + ((priceHigh - priceLow) * (rowIndex + 1)) / HEATMAP_ROWS;
+      const rowBottom = priceLow + ((priceHigh - priceLow) * rowIndex) / HEATMAP_ROWS;
+      let qty = 0;
+      for (const [p, q] of col.bids) { const pp = adj(p); if (pp >= rowBottom && pp < rowTop) qty += q; }
+      for (const [p, q] of col.asks) { const pp = adj(p); if (pp >= rowBottom && pp < rowTop) qty += q; }
+      return qty;
+    };
+    const grid = visibleHeatmap.map((col) => {
+      const rows = new Array(HEATMAP_ROWS);
+      for (let r = 0; r < HEATMAP_ROWS; r++) {
+        rows[r] = rowQtyFor(col, r);
+        if (rows[r] > maxRowQty) maxRowQty = rows[r];
+      }
+      return rows;
+    });
+    const interval = candles.length > 1 ? candles[1].time - candles[0].time : 60000;
+    const windowSpan = visibleCandles.length * interval;
+    const plotWidth = width - rightPad;
+    const colSpan = (1000 / windowSpan) * plotWidth + 1;
+    grid.forEach((rows, colIndex) => {
+      const x = ((visibleHeatmap[colIndex].time - windowStart) / windowSpan) * plotWidth;
+      rows.forEach((qty, rowIndex) => {
+        if (qty <= 0) return;
+        const intensity = Math.log1p(qty) / Math.log1p(maxRowQty || 1);
+        ctx.fillStyle = heatColor(intensity);
+        const yTop = priceToY(priceLow + ((priceHigh - priceLow) * (rowIndex + 1)) / HEATMAP_ROWS);
+        const yBottom = priceToY(priceLow + ((priceHigh - priceLow) * rowIndex) / HEATMAP_ROWS);
+        ctx.fillRect(x, yTop, colSpan, yBottom - yTop + 1);
+      });
+    });
+  }
+
+  // --- price grid labels ---
+  ctx.strokeStyle = lineColor;
+  ctx.fillStyle = mutedColor;
+  ctx.font = "11px ui-monospace, monospace";
+  for (let i = 0; i <= 4; i++) {
+    const price = priceLow + ((priceHigh - priceLow) * i) / 4;
+    const y = priceToY(price);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width - rightPad, y);
+    ctx.stroke();
+    ctx.fillText(formatNumber(price, shownDecimals()), width - rightPad + 4, y + 4);
+  }
+
+  // --- candle outlines on top of the heatmap ---
+  visibleCandles.forEach((candle, index) => {
+    const x = index * columnWidth + columnWidth / 2;
+    const color = candle.close >= candle.open ? bidColor : askColor;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, priceToY(candle.high));
+    ctx.lineTo(x, priceToY(candle.low));
+    ctx.stroke();
+    const top = priceToY(Math.max(candle.open, candle.close));
+    const bottom = priceToY(Math.min(candle.open, candle.close));
+    ctx.strokeRect(x - columnWidth * 0.35, top, columnWidth * 0.7, Math.max(1, bottom - top));
+
+    const volumeBarHeight = (candle.volume / volumeMax) * (height - chartHeight - 6);
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = color;
+    ctx.fillRect(x - columnWidth * 0.35, height - volumeBarHeight, columnWidth * 0.7, volumeBarHeight);
+    ctx.globalAlpha = 1;
+  });
+}
+
+setInterval(() => {
+  if (dirty.book) { renderOrderBook(); dirty.book = false; }
+  if (dirty.tape) { renderTape(); dirty.tape = false; }
+  if (dirty.chart) { renderChart(); renderVolumeList(); dirty.chart = false; }
+}, 150);
+
+addEventListener("resize", () => { dirty.chart = true; });
+
+function refreshCalibInfo() {
+  if (!offsetSetAt) {
+    dom.calibInfo.className = "calib-info mono";
+    dom.calibInfo.textContent = "belum dikalibrasi";
+    return;
+  }
+  const age = Math.round((Date.now() - offsetSetAt) / 1000);
+  const sign = priceOffset >= 0 ? "+" : "-";
+  const abs = Math.abs(priceOffset);
+  dom.calibInfo.className = "calib-info mono " + (age > 120 ? "stale" : "fresh");
+  dom.calibInfo.textContent =
+    `selisih ${sign}${abs.toFixed(brokerDigits)} (${sign}${Math.round(abs * 10 ** brokerDigits)} poin) | ${age} dtk lalu` +
+    (age > 120 ? " - kalibrasi ulang" : "");
+}
+
+function resetCalibration() {
+  priceOffset = 0;
+  offsetSetAt = 0;
+  refreshCalibInfo();
+  dirty.book = dirty.tape = dirty.chart = true;
+}
+
+dom.calibrate.onclick = () => {
+  const mt5 = parseFloat(dom.mt5Price.value);
+  const raw = rawLastPrice();
+  if (!isFinite(mt5) || !raw) return;
+  priceOffset = mt5 - raw;
+  offsetSetAt = Date.now();
+  refreshCalibInfo();
+  dirty.book = dirty.tape = dirty.chart = true;
+};
+dom.resetOffset.onclick = resetCalibration;
+dom.brokerDigits.onchange = (e) => {
+  brokerDigits = +e.target.value;
+  dom.mt5Price.step = String(10 ** -brokerDigits);
+  try { localStorage.setItem("brokerDigits", String(brokerDigits)); } catch (err) {}
+  refreshCalibInfo();
+  dirty.book = dirty.tape = dirty.chart = true;
+};
+setInterval(refreshCalibInfo, 1000);
+
+dom.symbolSelect.onchange = (e) => { currentSymbol = e.target.value; resetCalibration(); connectMarket(); };
+dom.intervalSelect.onchange = (e) => { currentInterval = e.target.value; connectMarket(); };
+dom.loadButton.onclick = () => {
+  const value = dom.customSymbol.value.trim().toLowerCase();
+  if (value) { currentSymbol = value; resetCalibration(); connectMarket(); }
+};
+
+connectMarket();
