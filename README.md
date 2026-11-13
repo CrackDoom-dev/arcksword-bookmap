@@ -25,11 +25,15 @@ Vite akan menampilkan alamat seperti `http://localhost:5173`, buka di browser.
   sesuai aturan URL baru Binance Futures.
 - Selisih kecil dengan harga MT5 tetap mungkin ada (funding, basis, kuotasi broker). Pakai kolom "Harga di MT5"
   untuk kalibrasi offset.
+- Tampilan ala Bookmap: heatmap di belakang candle, gelembung transaksi (hijau = beli agresif,
+  merah = jual agresif, ukuran = volume), COB (ketebalan order book saat ini), SVP (volume per level
+  harga, kotak kuning = level terbanyak), volume per candle, dan CVD (selisih beli-jual kumulatif).
+  Tombol Bubble / COB / SVP / CVD di atas grafik menyalakan atau mematikan tiap lapisan.
+- Binance tidak menyediakan riwayat order book. Heatmap, SVP, dan CVD hanya merekam selama halaman
+  terbuka (maksimal 30 menit terakhir), jadi biarkan halaman terbuka agar makin penuh.
 - Heatmap menunjukkan ketebalan order resting (bid + ask) di tiap level harga seiring
   waktu, disampel tiap 1 detik dari snapshot order book 20 level. Karena hanya 20 level
   per sisi yang tersedia dari API publik, heatmap paling informatif untuk area harga
   dekat best bid/ask, bukan seluruh depth pasar.
 - Nama "Arcksword Bookmap Free" adalah penamaan proyek pribadi, tidak berafiliasi
   dengan produk komersial manapun yang memakai nama serupa.
-
-## akses here 👉 https://crackdoom-dev.github.io/arcksword-bookmap/

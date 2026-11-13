@@ -109,7 +109,10 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 #candleTimer { color: var(--accent); text-transform: none; letter-spacing: 0; font-size: 12px; float: right; }
 .panel h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
 
-#bookmapCanvas { width: 100%; height: 400px; display: block; }
+#bookmapCanvas { width: 100%; height: 560px; display: block; }
+.chips { display: flex; gap: 6px; margin-bottom: 8px; }
+.chips button { min-height: 28px; padding: 2px 11px; font-size: 12px; border-radius: 14px; color: var(--muted); }
+.chips button.on { color: var(--text); border-color: var(--accent); background: #13263b; }
 
 .book-row, .tape-row, .volume-row {
   position: relative;
