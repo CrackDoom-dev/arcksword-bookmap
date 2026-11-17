@@ -69,7 +69,16 @@
         <button data-layer="svp">SVP</button>
         <button data-layer="cvd">CVD</button>
       </div>
+      <div class="heat-tools">
+        <button id="scaleToggle" type="button">Skala: Log</button>
+        <label class="cut">Kontras <input id="cutSlider" type="range" min="0" max="60" step="1" value="0" /><span id="cutValue" class="mono">0%</span></label>
+      </div>
       <canvas id="bookmapCanvas"></canvas>
+      <div class="legend">
+        <span id="legendMin" class="mono">0</span>
+        <div id="legendBar" class="legend-bar"></div>
+        <span id="legendMax" class="mono">0</span>
+      </div>
     </div>
     <div class="panel area-book">
       <h2>Order book</h2>

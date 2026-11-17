@@ -33,6 +33,12 @@ const dom = {
   volumeList: el("volumeList"),
   bookmapCanvas: el("bookmapCanvas"),
   candleTimer: el("candleTimer"),
+  scaleToggle: el("scaleToggle"),
+  cutSlider: el("cutSlider"),
+  cutValue: el("cutValue"),
+  legendMin: el("legendMin"),
+  legendMax: el("legendMax"),
+  legendBar: el("legendBar"),
   mt5Price: el("mt5Price"),
   calibrate: el("calibrate"),
   resetOffset: el("resetOffset"),
@@ -353,6 +359,31 @@ document.querySelectorAll("#layerChips button").forEach((btn) => {
   };
 });
 
+// ---- Kontras heatmap (skala + ambang order kecil, disimpan per browser) ----
+const heatPrefs = { linear: false, cut: 0 };
+try { Object.assign(heatPrefs, JSON.parse(localStorage.getItem("heatPrefs") || "{}")); } catch (e) {}
+const saveHeatPrefs = () => { try { localStorage.setItem("heatPrefs", JSON.stringify(heatPrefs)); } catch (e) {} };
+function syncHeatControls() {
+  dom.scaleToggle.textContent = "Skala: " + (heatPrefs.linear ? "Linear" : "Log");
+  dom.cutSlider.value = String(heatPrefs.cut);
+  dom.cutValue.textContent = heatPrefs.cut + "%";
+}
+dom.scaleToggle.onclick = () => { heatPrefs.linear = !heatPrefs.linear; syncHeatControls(); saveHeatPrefs(); dirty.chart = true; };
+dom.cutSlider.oninput = () => { heatPrefs.cut = +dom.cutSlider.value; syncHeatControls(); saveHeatPrefs(); dirty.chart = true; };
+syncHeatControls();
+dom.legendBar.style.background = `linear-gradient(90deg, ${HEAT_STOPS.map(([t, c]) => `rgb(${c.join(",")}) ${t * 100}%`).join(", ")})`;
+
+// ---- Sentuh/arahkan kursor untuk melihat ketebalan satu level ----
+let hover = null;
+const canvasPoint = (e) => { const r = dom.bookmapCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+dom.bookmapCanvas.addEventListener("pointermove", (e) => { if (e.pointerType !== "mouse") return; hover = canvasPoint(e); dirty.chart = true; });
+dom.bookmapCanvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") { hover = null; dirty.chart = true; } });
+dom.bookmapCanvas.addEventListener("click", (e) => {
+  const p = canvasPoint(e);
+  hover = hover && Math.hypot(hover.x - p.x, hover.y - p.y) < 14 ? null : p;
+  dirty.chart = true;
+});
+
 const clockLabel = (t) => new Date(t).toLocaleTimeString("id-ID", { hour12: false, hour: "2-digit", minute: "2-digit" });
 const compact = (v) => {
   const a = Math.abs(v);
@@ -442,6 +473,8 @@ function renderBookmap() {
   ctx.beginPath();
   ctx.rect(0, 0, plotW, chartH);
   ctx.clip();
+  let heatGrid = null;
+  let heatMax = 1;
   if (visCols.length) {
     const colW = (2000 / windowSpan) * plotW + 1;
     const grid = visCols.map((col) => {
@@ -460,12 +493,18 @@ function renderBookmap() {
     values.sort((x, y) => x - y);
     const maxQty = values.length ? values[Math.floor(values.length * 0.985)] || values.at(-1) : 1;
     const logMax = Math.log1p(maxQty);
+    const cut = heatPrefs.cut / 100;
+    heatGrid = grid;
+    heatMax = maxQty;
+    dom.legendMin.textContent = compact(maxQty * cut);
+    dom.legendMax.textContent = compact(maxQty) + "+ | " + (heatPrefs.linear ? "linear" : "log");
     grid.forEach((rows, ci) => {
       const x = xOf(visCols[ci].time);
       rows.forEach((qty, r) => {
-        if (qty <= 0) return;
-        // gamma > 1: level sepi tetap gelap, hanya order tebal yang menyala
-        const t = Math.pow(Math.min(1, Math.log1p(qty) / logMax), 1.5);
+        if (qty <= 0 || qty < maxQty * cut) return;
+        const t = heatPrefs.linear
+          ? Math.min(1, qty / maxQty)
+          : Math.pow(Math.min(1, Math.log1p(qty) / logMax), 1.5);
         ctx.fillStyle = heatColor(t);
         ctx.fillRect(x, chartH - (r + 1) * rowH, colW, rowH + 1);
       });
@@ -696,6 +735,50 @@ function renderBookmap() {
       ctx.fillStyle = up ? bidColor : askColor;
       ctx.fillText((acc >= 0 ? "+" : "") + compact(acc), plotW + 4, Math.min(cvdTop + cvdH - 4, Math.max(cvdTop + 12, yC(acc) + 4)));
     }
+  }
+
+  // ---- Crosshair + angka ketebalan level yang disentuh ----
+  if (hover && hover.x >= 0 && hover.x < plotW && hover.y >= 0 && hover.y < chartH) {
+    const r = Math.min(ROWS - 1, Math.max(0, Math.floor((chartH - hover.y) / rowH)));
+    const t = windowStart + (hover.x / plotW) * windowSpan;
+    const step = (pHigh - pLow) / ROWS;
+    const rowLow = pLow + r * step;
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    ctx.moveTo(hover.x, 0);
+    ctx.lineTo(hover.x, chartH);
+    ctx.moveTo(0, hover.y);
+    ctx.lineTo(plotW, hover.y);
+    ctx.stroke();
+    ctx.restore();
+    let ci = visCols.length - 1;
+    while (ci >= 0 && visCols[ci].time > t) ci--;
+    const hasData = heatGrid && ci >= 0 && t - visCols[ci].time <= 2500;
+    const qty = hasData ? heatGrid[ci][r] : 0;
+    const lines = [
+      `${formatNumber(rowLow, shownDecimals())} - ${formatNumber(rowLow + step, shownDecimals())}`,
+      new Date(t).toLocaleTimeString("id-ID", { hour12: false }),
+    ];
+    if (!hasData) lines.push("belum ada data heatmap");
+    else if (qty <= 0) lines.push("tidak ada order");
+    else {
+      const side = rowLow + step / 2 < adj(visCols[ci].mid) ? "bid (beli)" : "ask (jual)";
+      lines.push(`tebal ${formatNumber(qty, 2)} ${side}`);
+      lines.push(`${Math.round((qty / heatMax) * 100)}% dari skala warna${qty < (heatMax * heatPrefs.cut) / 100 ? " (tersembunyi)" : ""}`);
+    }
+    ctx.font = "11px ui-monospace, monospace";
+    const boxW = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 12;
+    const boxHt = lines.length * 14 + 8;
+    const bx = Math.min(plotW - boxW - 2, Math.max(2, hover.x + 12));
+    const by = Math.min(chartH - boxHt - 2, Math.max(2, hover.y - boxHt - 12));
+    ctx.fillStyle = "rgba(8,12,20,0.92)";
+    ctx.fillRect(bx, by, boxW, boxHt);
+    ctx.strokeStyle = "rgba(160,180,200,0.5)";
+    ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxHt - 1);
+    ctx.fillStyle = "#dde6ef";
+    lines.forEach((l, i) => ctx.fillText(l, bx + 6, by + 14 + i * 14));
   }
 }
 
