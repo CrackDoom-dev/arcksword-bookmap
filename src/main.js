@@ -30,6 +30,7 @@ const dom = {
   bookmapCanvas: el("bookmapCanvas"),
   candleTimer: el("candleTimer"),
   scaleToggle: el("scaleToggle"),
+  microToggle: el("microToggle"),
   cutSlider: el("cutSlider"),
   cutValue: el("cutValue"),
   legendMin: el("legendMin"),
@@ -309,6 +310,7 @@ const HEAT_STOPS = [
   [0.78, [225, 195, 45]],
   [1.0, [225, 70, 50]],
 ];
+const heatAlpha = (t) => Math.min(1, 0.15 + 1.2 * t);
 function heatColor(t) {
   for (let i = 0; i < HEAT_STOPS.length - 1; i++) {
     const [t0, c0] = HEAT_STOPS[i];
@@ -350,18 +352,20 @@ document.querySelectorAll("#layerChips button").forEach((btn) => {
   };
 });
 
-const heatPrefs = { linear: false, cut: 0 };
+const heatPrefs = { linear: false, cut: 0, micro: false };
 try { Object.assign(heatPrefs, JSON.parse(localStorage.getItem("heatPrefs") || "{}")); } catch (e) {}
 const saveHeatPrefs = () => { try { localStorage.setItem("heatPrefs", JSON.stringify(heatPrefs)); } catch (e) {} };
 function syncHeatControls() {
   dom.scaleToggle.textContent = "Skala: " + (heatPrefs.linear ? "Linear" : "Log");
+  dom.microToggle.textContent = "Candle: " + (heatPrefs.micro ? "Mikro" : "Asli");
   dom.cutSlider.value = String(heatPrefs.cut);
   dom.cutValue.textContent = heatPrefs.cut + "%";
 }
 dom.scaleToggle.onclick = () => { heatPrefs.linear = !heatPrefs.linear; syncHeatControls(); saveHeatPrefs(); dirty.chart = true; };
+dom.microToggle.onclick = () => { heatPrefs.micro = !heatPrefs.micro; syncHeatControls(); saveHeatPrefs(); dirty.chart = true; };
 dom.cutSlider.oninput = () => { heatPrefs.cut = +dom.cutSlider.value; syncHeatControls(); saveHeatPrefs(); dirty.chart = true; };
 syncHeatControls();
-dom.legendBar.style.background = `linear-gradient(90deg, ${HEAT_STOPS.map(([t, c]) => `rgb(${c.join(",")}) ${t * 100}%`).join(", ")})`;
+dom.legendBar.style.background = `linear-gradient(90deg, ${HEAT_STOPS.map(([t, c]) => `rgba(${c.join(",")},${heatAlpha(t).toFixed(2)}) ${t * 100}%`).join(", ")})`;
 
 let hover = null;
 const canvasPoint = (e) => { const r = dom.bookmapCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
@@ -434,7 +438,7 @@ function renderBookmap() {
   const winTrades = tradeHistory.slice(startIdx);
 
   const adjustCandle = (c) => ({ ...c, open: adj(c.open), high: adj(c.high), low: adj(c.low), close: adj(c.close) });
-  const micro = windowSpan < interval * 10 && winTrades.length > 1;
+  const micro = heatPrefs.micro && windowSpan < interval * 10 && winTrades.length > 1;
   const stepOptions = [1000, 2000, 5000, 10000, 15000, 30000, 60000];
   const step = micro ? stepOptions.find((o) => o >= windowSpan / 40) || 60000 : interval;
   let vis;
@@ -509,10 +513,12 @@ function renderBookmap() {
         const t = heatPrefs.linear
           ? Math.min(1, qty / maxQty)
           : Math.pow(Math.min(1, Math.log1p(qty) / logMax), 1.5);
+        ctx.globalAlpha = heatAlpha(t);
         ctx.fillStyle = heatColor(t);
         ctx.fillRect(x, chartH - (r + 1) * rowH, colW, rowH + 1);
       });
     });
+    ctx.globalAlpha = 1;
   }
 
   const stepsMin = [1, 2, 5, 10, 15, 30];
@@ -531,7 +537,7 @@ function renderBookmap() {
   const candleXs = [];
   vis.forEach((c) => {
     const candleW = (Math.max(0, Math.min(step, now - c.time)) / windowSpan) * plotW;
-    const bodyW = Math.max(2, Math.min(candleW * 0.7, 26));
+    const bodyW = Math.max(2, Math.min(candleW * 0.7, 60));
     const x = xOf(c.time) + candleW / 2;
     const color = c.close >= c.open ? bidColor : askColor;
     candleXs.push({ x, bodyW, color, c });
