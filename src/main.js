@@ -1,13 +1,9 @@
-// Arcksword Bookmap Free
-// Sumber data: market data publik Binance (REST + WebSocket), tanpa delay buatan.
-
-// Spot (PAXG, BTC, dll)
 const SPOT_HOSTS = [
   { kind: "spot", api: "/api/v3", rest: "https://data-api.binance.vision", ws: "wss://data-stream.binance.vision" },
   { kind: "spot", api: "/api/v3", rest: "https://api.binance.com", ws: "wss://stream.binance.com:9443" },
   { kind: "spot", api: "/api/v3", rest: "https://api.binance.me", ws: "wss://stream.binance.me:9443" },
 ];
-// USDS-M Futures (XAUUSDT = emas perpetual, XAGUSDT = perak perpetual)
+
 const FUTURES_HOSTS = [
   { kind: "futures", api: "/fapi/v1", rest: "https://fapi.binance.com", ws: "wss://fstream.binance.com" },
   { kind: "futures", api: "/fapi/v1", rest: "https://fapi1.binance.com", ws: "wss://fstream.binance.com" },
@@ -61,7 +57,6 @@ function decimalPlacesForPrice(price) {
   return 6;
 }
 
-// ---- State ----
 let currentSymbol = "xauusdt";
 let currentInterval = "1m";
 let activeHost = hostsFor(currentSymbol)[0];
@@ -72,9 +67,9 @@ let candles = [];
 let orderBookBids = [];
 let orderBookAsks = [];
 let tradeTape = [];
-let tradeHistory = []; // semua transaksi di jendela (untuk gelembung, SVP, CVD)
+let tradeHistory = [];
 let tapeFlow = { buy: 0, sell: 0 };
-let heatmapColumns = []; // { time, bids:[[price,qty]], asks:[[price,qty]] }
+let heatmapColumns = [];
 let priceDecimals = 2;
 
 let priceOffset = 0;
@@ -88,12 +83,11 @@ const shownDecimals = () => (offsetSetAt ? brokerDigits : priceDecimals);
 const fmtAdj = (price) => formatNumber(adj(price), shownDecimals());
 const rawLastPrice = () => (tradeTape[0] ? tradeTape[0].price : candles.length ? candles.at(-1).close : 0);
 
-const MAX_HEATMAP_COLUMNS = 900; // 30 menit pada sampel 2 detik
+const MAX_HEATMAP_COLUMNS = 900;
 const HEATMAP_ROWS = 80;
 
 const dirty = { book: false, tape: false, chart: false };
 
-// ---- Networking ----
 async function fetchKlinesWithFallback(symbol, interval) {
   let lastError;
   for (const host of hostsFor(symbol)) {
@@ -152,7 +146,7 @@ async function connectMarket(isReconnect = false) {
   const sym = currentSymbol;
   let urls;
   if (activeHost.kind === "futures") {
-    // Binance Futures memisah WebSocket: depth di /public, trade & kline di /market
+
     urls = [
       `${activeHost.ws}/public/stream?streams=${sym}@depth20@100ms`,
       `${activeHost.ws}/market/stream?streams=${sym}@aggTrade/${sym}@kline_${currentInterval}`,
@@ -213,7 +207,6 @@ function handleSocketMessage(event) {
   }
 }
 
-// ---- Heatmap sampling: order book 500 level, diambil tiap 2 detik ----
 let serverOffset = 0;
 const nowMs = () => Date.now() + serverOffset;
 async function syncClock() {
@@ -255,7 +248,6 @@ setInterval(() => {
   dirty.chart = true;
 }, 2000);
 
-// ---- Rendering ----
 function renderOrderBook() {
   const asksTop = orderBookAsks.slice(0, 10).reverse();
   const bidsTop = orderBookBids.slice(0, 10);
@@ -345,7 +337,6 @@ function fmtClock(ms) {
   return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
 }
 
-// ---- Layer toggles (disimpan per browser) ----
 const layers = { bubbles: true, cob: true, svp: true, cvd: true };
 try { Object.assign(layers, JSON.parse(localStorage.getItem("layers") || "{}")); } catch (e) {}
 document.querySelectorAll("#layerChips button").forEach((btn) => {
@@ -359,7 +350,6 @@ document.querySelectorAll("#layerChips button").forEach((btn) => {
   };
 });
 
-// ---- Kontras heatmap (skala + ambang order kecil, disimpan per browser) ----
 const heatPrefs = { linear: false, cut: 0 };
 try { Object.assign(heatPrefs, JSON.parse(localStorage.getItem("heatPrefs") || "{}")); } catch (e) {}
 const saveHeatPrefs = () => { try { localStorage.setItem("heatPrefs", JSON.stringify(heatPrefs)); } catch (e) {} };
@@ -373,7 +363,6 @@ dom.cutSlider.oninput = () => { heatPrefs.cut = +dom.cutSlider.value; syncHeatCo
 syncHeatControls();
 dom.legendBar.style.background = `linear-gradient(90deg, ${HEAT_STOPS.map(([t, c]) => `rgb(${c.join(",")}) ${t * 100}%`).join(", ")})`;
 
-// ---- Sentuh/arahkan kursor untuk melihat ketebalan satu level ----
 let hover = null;
 const canvasPoint = (e) => { const r = dom.bookmapCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 dom.bookmapCanvas.addEventListener("pointermove", (e) => { if (e.pointerType !== "mouse") return; hover = canvasPoint(e); dirty.chart = true; });
@@ -414,7 +403,6 @@ function renderBookmap() {
     return;
   }
 
-  // ---- Geometri: [heatmap | harga | COB | SVP] di atas, volume + waktu + CVD di bawah ----
   const axisW = 62;
   const sideW = Math.max(34, Math.min(64, width * 0.1));
   const cobW = layers.cob ? sideW : 0;
@@ -434,27 +422,44 @@ function renderBookmap() {
   const cols = heatmapColumns;
   const now = nowMs();
   const histSpan = cols.length ? now - cols[0].time : 0;
-  // Jendela waktu tumbuh mengikuti lama merekam, supaya heatmap selalu memenuhi lebar layar
+
   const windowSpan = Math.min(30 * 60000, Math.max(3 * 60000, histSpan * 1.04));
   const windowEnd = now + windowSpan * 0.03;
   const windowStart = windowEnd - windowSpan;
   const xOf = (t) => ((t - windowStart) / windowSpan) * plotW;
 
-  const vis = candles
-    .filter((c) => c.time + interval > windowStart)
-    .map((c) => ({ ...c, open: adj(c.open), high: adj(c.high), low: adj(c.low), close: adj(c.close) }));
   const visCols = cols.filter((c) => c.time >= windowStart);
-
-  // Trade dalam jendela (urut naik)
   let startIdx = tradeHistory.length;
   while (startIdx > 0 && tradeHistory[startIdx - 1].time >= windowStart) startIdx--;
   const winTrades = tradeHistory.slice(startIdx);
 
-  // ---- Rentang harga ----
+  const adjustCandle = (c) => ({ ...c, open: adj(c.open), high: adj(c.high), low: adj(c.low), close: adj(c.close) });
+  const micro = windowSpan < interval * 10 && winTrades.length > 1;
+  const stepOptions = [1000, 2000, 5000, 10000, 15000, 30000, 60000];
+  const step = micro ? stepOptions.find((o) => o >= windowSpan / 40) || 60000 : interval;
+  let vis;
+  if (micro) {
+    const buckets = new Map();
+    for (const t of winTrades) {
+      const key = Math.floor(t.time / step) * step;
+      const m = buckets.get(key);
+      if (!m) buckets.set(key, { time: key, open: t.price, high: t.price, low: t.price, close: t.price, volume: t.quantity });
+      else {
+        m.high = Math.max(m.high, t.price);
+        m.low = Math.min(m.low, t.price);
+        m.close = t.price;
+        m.volume += t.quantity;
+      }
+    }
+    vis = [...buckets.values()].map(adjustCandle);
+  } else {
+    vis = candles.filter((c) => c.time + interval > windowStart).map(adjustCandle);
+  }
+
   let lo = Infinity;
   let hi = -Infinity;
   const upd = (p) => { if (p < lo) lo = p; if (p > hi) hi = p; };
-  if (interval <= windowSpan * 1.5) vis.forEach((c) => { upd(c.low); upd(c.high); });
+  if (step <= windowSpan * 1.5) vis.forEach((c) => { upd(c.low); upd(c.high); });
   winTrades.forEach((t) => upd(adj(t.price)));
   visCols.forEach((c) => upd(adj(c.mid)));
   if (!isFinite(lo)) { const c = vis.at(-1) || { low: adj(candles.at(-1).close), high: adj(candles.at(-1).close) }; upd(c.low); upd(c.high); }
@@ -468,7 +473,6 @@ function renderBookmap() {
   const rowOf = (p) => Math.floor(((p - pLow) / (pHigh - pLow)) * ROWS);
   const rowY = (r) => chartH - (r + 0.5) * rowH;
 
-  // ---- Heatmap ----
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, plotW, chartH);
@@ -511,7 +515,6 @@ function renderBookmap() {
     });
   }
 
-  // garis bantu waktu
   const stepsMin = [1, 2, 5, 10, 15, 30];
   const targetStep = windowSpan / 60000 / 4;
   const stepMs = (stepsMin.find((m) => m >= targetStep) || 30) * 60000;
@@ -524,11 +527,10 @@ function renderBookmap() {
   ticks.forEach((t) => { const x = Math.round(xOf(t)) + 0.5; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, chartH); ctx.stroke(); });
   ctx.restore();
 
-  // ---- Candle (di atas heatmap) ----
   const volMax = Math.max(...vis.map((c) => c.volume), 1e-9);
   const candleXs = [];
   vis.forEach((c) => {
-    const candleW = (Math.max(0, Math.min(interval, now - c.time)) / windowSpan) * plotW;
+    const candleW = (Math.max(0, Math.min(step, now - c.time)) / windowSpan) * plotW;
     const bodyW = Math.max(2, Math.min(candleW * 0.7, 26));
     const x = xOf(c.time) + candleW / 2;
     const color = c.close >= c.open ? bidColor : askColor;
@@ -548,7 +550,6 @@ function renderBookmap() {
     ctx.strokeRect(x - bodyW / 2 + 0.5, top + 0.5, bodyW - 1, Math.max(1, bottom - top) - 1);
   });
 
-  // ---- Gelembung transaksi ----
   if (layers.bubbles && winTrades.length) {
     const buckets = new Map();
     for (const t of winTrades) {
@@ -567,7 +568,7 @@ function renderBookmap() {
       const sec = Math.floor(key / 100000);
       bubbles.push({ x: xOf(sec * 1000 + 500), y: rowY(row), r: 2 + (maxR - 2) * Math.sqrt(qty / maxB), isSell });
     });
-    bubbles.sort((a, b) => b.r - a.r); // kecil digambar terakhir, tetap terlihat
+    bubbles.sort((a, b) => b.r - a.r);
     bubbles.forEach((b) => {
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
@@ -580,7 +581,6 @@ function renderBookmap() {
   }
   ctx.restore();
 
-  // ---- Sumbu harga ----
   ctx.fillStyle = "#0d121b";
   ctx.fillRect(plotW, 0, axisW, chartH);
   ctx.lineWidth = 1;
@@ -598,7 +598,6 @@ function renderBookmap() {
     ctx.fillText(formatNumber(price, shownDecimals()), plotW + 4, Math.min(chartH - 2, Math.max(11, y + 4)));
   }
 
-  // ---- COB: ketebalan order book saat ini ----
   if (layers.cob) {
     const src = deepBook || { bids: orderBookBids, asks: orderBookAsks };
     const bidRows = new Float32Array(ROWS);
@@ -618,7 +617,6 @@ function renderBookmap() {
     ctx.fillText("COB", cobX + 3, 12);
   }
 
-  // ---- SVP: volume per level harga di jendela ----
   if (layers.svp) {
     const buyRows = new Float32Array(ROWS);
     const sellRows = new Float32Array(ROWS);
@@ -650,7 +648,6 @@ function renderBookmap() {
     ctx.fillText("SVP", svpX + 3, 12);
   }
 
-  // ---- Harga terakhir ----
   const last = vis.at(-1);
   const lastY = toY(last.close);
   const priceColor = last.close >= last.open ? bidColor : askColor;
@@ -674,7 +671,6 @@ function renderBookmap() {
   if (remaining !== null) ctx.fillText(fmtClock(remaining), plotW + 4, boxY + 25);
   ctx.font = "11px ui-monospace, monospace";
 
-  // ---- Volume per candle ----
   ctx.fillStyle = "#0c1119";
   ctx.fillRect(0, volTop, plotW, volH);
   candleXs.forEach(({ x, bodyW, color, c }) => {
@@ -685,16 +681,14 @@ function renderBookmap() {
     ctx.globalAlpha = 1;
   });
 
-  // ---- Sumbu waktu ----
   ctx.fillStyle = mutedColor;
   ticks.forEach((t) => {
     const x = xOf(t);
     const label = clockLabel(t);
     ctx.fillText(label, Math.min(plotW - 30, Math.max(0, x - 15)), timeTop + 11);
   });
-  ctx.fillText(`${Math.round(windowSpan / 60000)} mnt | rekam ${fmtClock(histSpan)}`, 6, 14);
+  ctx.fillText(`${Math.round(windowSpan / 60000)} mnt | rekam ${fmtClock(histSpan)} | candle ${micro ? step / 1000 + "d" : currentInterval}`, 6, 14);
 
-  // ---- CVD ----
   if (layers.cvd) {
     ctx.fillStyle = "#0c1119";
     ctx.fillRect(0, cvdTop, plotW + axisW, cvdH);
@@ -737,7 +731,6 @@ function renderBookmap() {
     }
   }
 
-  // ---- Crosshair + angka ketebalan level yang disentuh ----
   if (hover && hover.x >= 0 && hover.x < plotW && hover.y >= 0 && hover.y < chartH) {
     const r = Math.min(ROWS - 1, Math.max(0, Math.floor((chartH - hover.y) / rowH)));
     const t = windowStart + (hover.x / plotW) * windowSpan;
