@@ -94,6 +94,11 @@ const MIN_LOT = 0.5;
 const MAX_LOG_ROWS = 80;
 let orderLog = [];
 let prevBookCol = null;
+let logSeq = 0;
+let selectedLog = null;
+let logMarkers = [];
+let logScrollTo = false;
+let logPressed = false;
 const lotUnits = () => (currentSymbol === "xauusdt" || currentSymbol === "paxgusdt" ? 100 : 1);
 
 async function fetchKlinesWithFallback(symbol, interval) {
@@ -132,6 +137,7 @@ async function connectMarket(isReconnect = false) {
     heatmapColumns = [];
     deepBook = null;
     orderLog = [];
+    selectedLog = null;
     dirty.tape = true;
     dirty.log = true;
   }
@@ -293,10 +299,10 @@ function logOrderChanges(prev, next) {
       if (!inRange(price)) continue;
       const diff = (after.get(price) ?? 0) - (before.get(price) ?? 0);
       if (diff >= min) {
-        found.push({ time: next.time, price, side, qty: diff, kind: "muncul" });
+        found.push({ id: ++logSeq, time: next.time, price, side, qty: diff, kind: "muncul" });
       } else if (-diff >= min) {
         const eaten = executedAt(price, side, prev.time - 500) >= -diff * 0.5;
-        found.push({ time: next.time, price, side, qty: -diff, kind: eaten ? "termakan" : "ditarik" });
+        found.push({ id: ++logSeq, time: next.time, price, side, qty: -diff, kind: eaten ? "termakan" : "ditarik" });
       }
     }
   }
@@ -306,22 +312,54 @@ function logOrderChanges(prev, next) {
   dirty.log = true;
 }
 
+const LOG_TEXT = {
+  bids: { muncul: "Buy baru muncul", ditarik: "Buy ditarik", termakan: "Buy termakan" },
+  asks: { muncul: "Sell baru muncul", ditarik: "Sell ditarik", termakan: "Sell termakan" },
+};
+const LOG_HINT = {
+  muncul: "order baru muncul di order book",
+  ditarik: "order dibatalkan sebelum tereksekusi",
+  termakan: "order habis ditabrak transaksi",
+};
+
 function renderOrderLog() {
+  const list = dom.orderLogList;
   if (!orderLog.length) {
-    dom.orderLogList.innerHTML = `<div class="log-empty">menunggu order besar</div>`;
+    list.innerHTML = `<div class="log-empty">menunggu order besar</div>`;
     return;
   }
   const units = lotUnits();
-  dom.orderLogList.innerHTML = orderLog
+  const prevTop = list.scrollTop;
+  const prevH = list.scrollHeight;
+  list.innerHTML = orderLog
     .map((e) => {
+      const buy = e.side === "bids";
       const time = new Date(e.time).toLocaleTimeString("id-ID", { hour12: false });
-      return `<div class="log-row mono ${e.side === "bids" ? "bid" : "ask"}">` +
-        `<span>${time}</span><span>${fmtAdj(e.price)}</span>` +
-        `<span>${formatNumber(e.qty / units, 2)}</span>` +
-        `<span class="${e.kind}">${e.kind}</span></div>`;
+      return `<div class="log-row mono ${buy ? "bid" : "ask"} ${e.kind}${e.id === selectedLog ? " sel" : ""}" data-id="${e.id}" title="${LOG_HINT[e.kind]}">` +
+        `<span class="log-side">${buy ? "BUY" : "SELL"}</span>` +
+        `<span class="log-price">${fmtAdj(e.price)}</span>` +
+        `<span class="log-lot">${formatNumber(e.qty / units, 2)} lot</span>` +
+        `<span class="log-note">${time} \u00b7 ${LOG_TEXT[e.side][e.kind]}</span></div>`;
     })
     .join("");
+  if (prevTop > 0) list.scrollTop = prevTop + (list.scrollHeight - prevH);
+  if (logScrollTo) {
+    logScrollTo = false;
+    const row = list.querySelector(".sel");
+    if (row) list.scrollTop = Math.max(0, row.offsetTop - 4);
+  }
 }
+
+dom.orderLogList.addEventListener("pointerdown", () => { logPressed = true; });
+for (const type of ["pointerup", "pointercancel", "pointerleave"]) dom.orderLogList.addEventListener(type, () => { logPressed = false; });
+dom.orderLogList.addEventListener("click", (ev) => {
+  const row = ev.target.closest(".log-row");
+  if (!row) return;
+  const id = +row.dataset.id;
+  selectedLog = selectedLog === id ? null : id;
+  dirty.log = true;
+  dirty.chart = true;
+});
 
 function renderOrderBook() {
   const asksTop = orderBookAsks.slice(0, 10).reverse();
@@ -447,6 +485,19 @@ dom.bookmapCanvas.addEventListener("pointermove", (e) => { if (e.pointerType !==
 dom.bookmapCanvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") { hover = null; dirty.chart = true; } });
 dom.bookmapCanvas.addEventListener("click", (e) => {
   const p = canvasPoint(e);
+  let hit = null;
+  let hitD = 14;
+  for (const m of logMarkers) {
+    const d = Math.hypot(m.x - p.x, m.y - p.y);
+    if (d < hitD) { hitD = d; hit = m; }
+  }
+  if (hit) {
+    selectedLog = selectedLog === hit.id ? null : hit.id;
+    logScrollTo = true;
+    dirty.log = true;
+    dirty.chart = true;
+    return;
+  }
   hover = hover && Math.hypot(hover.x - p.x, hover.y - p.y) < 14 ? null : p;
   dirty.chart = true;
 });
@@ -659,6 +710,60 @@ function renderBookmap() {
       ctx.stroke();
     });
   }
+  logMarkers = [];
+  if (orderLog.length) {
+    const shown = orderLog.filter((e) => e.time >= windowStart);
+    const biggest = new Set([...shown].sort((x, y) => y.qty - x.qty).slice(0, 10).map((e) => e.id));
+    const units = lotUnits();
+    ctx.font = "10px ui-monospace, monospace";
+    for (const e of shown) {
+      const p = adj(e.price);
+      if (p < pLow || p > pHigh) continue;
+      const x = xOf(e.time);
+      const y = toY(p);
+      const buy = e.side === "bids";
+      const rgb = buy ? "40,199,154" : "227,86,79";
+      const sel = e.id === selectedLog;
+      logMarkers.push({ x, y, id: e.id });
+      if (sel) {
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = `rgba(${rgb},0.9)`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(plotW, Math.round(y) + 0.5);
+        ctx.stroke();
+        ctx.restore();
+      }
+      const sz = sel ? 8 : 5;
+      ctx.beginPath();
+      if (buy) { ctx.moveTo(x, y - sz); ctx.lineTo(x - sz, y + sz * 0.8); ctx.lineTo(x + sz, y + sz * 0.8); }
+      else { ctx.moveTo(x, y + sz); ctx.lineTo(x - sz, y - sz * 0.8); ctx.lineTo(x + sz, y - sz * 0.8); }
+      ctx.closePath();
+      if (e.kind === "ditarik") {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = `rgba(${rgb},1)`;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = e.kind === "termakan" ? "rgba(227,195,45,0.95)" : `rgba(${rgb},0.95)`;
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.stroke();
+      }
+      if (sel || biggest.has(e.id)) {
+        const label = formatNumber(e.qty / units, 2);
+        const left = x > plotW - 40;
+        ctx.textAlign = left ? "right" : "left";
+        ctx.fillStyle = e.kind === "termakan" ? "#e3c32d" : buy ? "#7ff0cf" : "#ff9a92";
+        ctx.fillText(label, left ? x - sz - 3 : x + sz + 3, y + 3);
+        ctx.textAlign = "left";
+      }
+    }
+    ctx.lineWidth = 1;
+    ctx.font = "11px ui-monospace, monospace";
+  }
   ctx.restore();
 
   ctx.fillStyle = "#0d121b";
@@ -676,6 +781,18 @@ function renderBookmap() {
     ctx.globalAlpha = 1;
     ctx.fillStyle = mutedColor;
     ctx.fillText(formatNumber(price, shownDecimals()), plotW + 4, Math.min(chartH - 2, Math.max(11, y + 4)));
+  }
+
+  const selEntry = selectedLog == null ? null : orderLog.find((e) => e.id === selectedLog);
+  if (selEntry) {
+    const sp = adj(selEntry.price);
+    if (sp >= pLow && sp <= pHigh) {
+      const sy = toY(sp);
+      ctx.fillStyle = selEntry.side === "bids" ? bidColor : askColor;
+      ctx.fillRect(plotW, sy - 8, axisW, 16);
+      ctx.fillStyle = "#06101a";
+      ctx.fillText(formatNumber(sp, shownDecimals()), plotW + 4, sy + 4);
+    }
   }
 
   if (layers.cob) {
@@ -858,7 +975,7 @@ function renderBookmap() {
 setInterval(() => {
   if (dirty.book) { renderOrderBook(); dirty.book = false; }
   if (dirty.tape) { renderTape(); dirty.tape = false; }
-  if (dirty.log) { renderOrderLog(); dirty.log = false; }
+  if (dirty.log && !logPressed) { renderOrderLog(); dirty.log = false; }
   if (dirty.chart) { renderBookmap(); renderVolumeList(); dirty.chart = false; }
 }, 150);
 
