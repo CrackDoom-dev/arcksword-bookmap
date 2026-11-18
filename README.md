@@ -71,6 +71,14 @@ Untuk membangun versi siap upload: `npm run build`, hasilnya ada di folder `dist
 - Kalau jaringanmu memblokir Binance, halaman akan menampilkan pesan gagal terhubung.
 - Ini alat bantu baca pasar, bukan saran trading.
 
+## Kontribusi
+
+Lihat [CONTRIBUTING.md](CONTRIBUTING.md). Bug dan request fitur lewat [Issues](https://github.com/CrackDoom-dev/arcksword-bookmap/issues/new/choose).
+
+<a href="https://github.com/CrackDoom-dev/arcksword-bookmap/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=CrackDoom-dev/arcksword-bookmap" alt="Kontributor">
+</a>
+
 ## Dibuat dengan
 
 JavaScript biasa, canvas, dan [Vite](https://vitejs.dev). Tanpa framework, tanpa server. Data dari API publik Binance lewat REST dan WebSocket.

@@ -1,0 +1,33 @@
+name: Request fitur
+description: Usul fitur atau perbaikan tampilan
+title: "[Fitur] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: kebutuhan
+    attributes:
+      label: Masalah yang mau diselesaikan
+      description: Apa yang susah dilakukan sekarang?
+    validations:
+      required: true
+  - type: textarea
+    id: usul
+    attributes:
+      label: Usulan kamu
+      description: Kalau ada gambaran tampilannya, tulis atau lampirkan sketsa.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatif
+    attributes:
+      label: Cara lain yang sudah dipikirkan
+  - type: dropdown
+    id: sumbang
+    attributes:
+      label: Mau ikut mengerjakan?
+      options:
+        - Tidak, cuma usul
+        - Ya, nanti saya kirim pull request
+        - Ya, tapi butuh arahan dulu
+    validations:
+      required: true

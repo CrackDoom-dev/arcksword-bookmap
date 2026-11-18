@@ -1,0 +1,10 @@
+name: Lainnya
+description: Pertanyaan, saran, atau hal yang tidak masuk dua template lain
+labels: ["question"]
+body:
+  - type: textarea
+    id: isi
+    attributes:
+      label: Isi
+    validations:
+      required: true

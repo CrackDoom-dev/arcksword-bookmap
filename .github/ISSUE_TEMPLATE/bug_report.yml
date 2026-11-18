@@ -1,0 +1,80 @@
+name: Laporan bug
+description: Ada yang rusak atau tampil aneh
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: masalah
+    attributes:
+      label: Apa yang terjadi
+      description: Ceritakan singkat apa yang kamu lihat.
+      placeholder: Heatmap kosong setelah ganti simbol ke PAXGUSDT
+    validations:
+      required: true
+  - type: textarea
+    id: langkah
+    attributes:
+      label: Langkah memunculkan
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: harusnya
+    attributes:
+      label: Yang kamu harapkan
+    validations:
+      required: true
+  - type: dropdown
+    id: simbol
+    attributes:
+      label: Simbol
+      options:
+        - XAUUSDT
+        - PAXGUSDT
+        - BTCUSDT
+        - ETHUSDT
+        - SOLUSDT
+        - Lainnya
+    validations:
+      required: true
+  - type: input
+    id: interval
+    attributes:
+      label: Interval
+      placeholder: 1m
+  - type: dropdown
+    id: perangkat
+    attributes:
+      label: Perangkat
+      options:
+        - Android
+        - iPhone / iPad
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser dan versinya
+      placeholder: Chrome 130
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Pesan error atau screenshot
+      description: Tempel error dari console kalau ada, atau seret gambar ke sini.
+  - type: checkboxes
+    id: cek
+    attributes:
+      label: Sudah dicek
+      options:
+        - label: Sudah cari di issue lain dan belum ada yang sama
+          required: true
+        - label: Sudah coba muat ulang halaman
+          required: true
