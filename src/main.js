@@ -796,13 +796,11 @@ function refreshCalibInfo() {
     dom.calibInfo.textContent = "belum dikalibrasi";
     return;
   }
-  const age = Math.round((Date.now() - offsetSetAt) / 1000);
   const sign = priceOffset >= 0 ? "+" : "-";
   const abs = Math.abs(priceOffset);
-  dom.calibInfo.className = "calib-info mono " + (age > 120 ? "stale" : "fresh");
+  dom.calibInfo.className = "calib-info mono fresh";
   dom.calibInfo.textContent =
-    `selisih ${sign}${abs.toFixed(brokerDigits)} (${sign}${Math.round(abs * 10 ** brokerDigits)} poin) | ${age} dtk lalu` +
-    (age > 120 ? " - kalibrasi ulang" : "");
+    `selisih ${sign}${abs.toFixed(brokerDigits)} (${sign}${Math.round(abs * 10 ** brokerDigits)} poin)`;
 }
 
 function resetCalibration() {
