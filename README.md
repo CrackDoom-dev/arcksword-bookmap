@@ -37,6 +37,7 @@ Semuanya jalan di browser. Data diambil langsung dari Binance, tidak lewat serve
 | **Bubble** | Gelembung transaksi, hijau beli agresif, merah jual agresif, ukuran sesuai volume |
 | **COB, SVP, CVD** | Order book saat ini, volume per level harga, dan selisih beli-jual kumulatif |
 | **Garis harga** | Harga terakhir dengan hitung mundur sampai candle berikutnya |
+| **Log order** | Order besar (mulai 0,5 lot) yang muncul, ditarik, atau termakan di order book, dengan ukuran dalam lot |
 | **Kalibrasi MT5** | Samakan harga dengan broker kamu, mendukung 2 dan 3 digit |
 
 Simbol bawaannya **XAUUSDT** (emas perpetual di Binance Futures), karena paling dekat dengan XAUUSD. PAXG, BTC, ETH, dan SOL ada di dropdown, simbol lain bisa diketik sendiri.

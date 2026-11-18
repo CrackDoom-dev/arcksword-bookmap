@@ -27,6 +27,7 @@ const dom = {
   orderBookList: el("orderBookList"),
   tapeList: el("tapeList"),
   volumeList: el("volumeList"),
+  orderLogList: el("orderLogList"),
   bookmapCanvas: el("bookmapCanvas"),
   candleTimer: el("candleTimer"),
   scaleToggle: el("scaleToggle"),
@@ -87,7 +88,13 @@ const rawLastPrice = () => (tradeTape[0] ? tradeTape[0].price : candles.length ?
 const MAX_HEATMAP_COLUMNS = 900;
 const HEATMAP_ROWS = 80;
 
-const dirty = { book: false, tape: false, chart: false };
+const dirty = { book: false, tape: false, chart: false, log: false };
+
+const MIN_LOT = 0.5;
+const MAX_LOG_ROWS = 80;
+let orderLog = [];
+let prevBookCol = null;
+const lotUnits = () => (currentSymbol === "xauusdt" || currentSymbol === "paxgusdt" ? 100 : 1);
 
 async function fetchKlinesWithFallback(symbol, interval) {
   let lastError;
@@ -124,8 +131,11 @@ async function connectMarket(isReconnect = false) {
     tapeFlow = { buy: 0, sell: 0 };
     heatmapColumns = [];
     deepBook = null;
+    orderLog = [];
     dirty.tape = true;
+    dirty.log = true;
   }
+  prevBookCol = null;
 
   dom.status.className = "status status-off";
   dom.status.textContent = "menghubungkan";
@@ -239,15 +249,79 @@ setInterval(pollDeep, 2000);
 setInterval(() => {
   const src = deepBook || { bids: orderBookBids, asks: orderBookAsks };
   if (!src.bids.length || !src.asks.length) return;
-  heatmapColumns.push({
+  const col = {
     time: nowMs(),
     mid: (+src.bids[0][0] + +src.asks[0][0]) / 2,
     bids: flatBook(src.bids),
     asks: flatBook(src.asks),
-  });
+  };
+  heatmapColumns.push(col);
+  if (prevBookCol) logOrderChanges(prevBookCol, col);
+  prevBookCol = col;
   if (heatmapColumns.length > MAX_HEATMAP_COLUMNS) heatmapColumns.shift();
   dirty.chart = true;
 }, 2000);
+
+const sideMap = (flat) => {
+  const m = new Map();
+  for (let i = 0; i < flat.length; i += 2) m.set(flat[i], flat[i + 1]);
+  return m;
+};
+
+function executedAt(price, side, since) {
+  let sum = 0;
+  for (let i = tradeHistory.length - 1; i >= 0; i--) {
+    const t = tradeHistory[i];
+    if (t.time < since) break;
+    if (side === "bids" ? t.isSell && t.price <= price + 1e-9 : !t.isSell && t.price >= price - 1e-9) sum += t.quantity;
+  }
+  return sum;
+}
+
+function logOrderChanges(prev, next) {
+  const min = MIN_LOT * lotUnits();
+  const found = [];
+  for (const side of ["bids", "asks"]) {
+    const a = prev[side];
+    const b = next[side];
+    if (!a.length || !b.length) continue;
+    const limit = side === "bids" ? Math.max(a.at(-2), b.at(-2)) : Math.min(a.at(-2), b.at(-2));
+    const inRange = side === "bids" ? (p) => p >= limit : (p) => p <= limit;
+    const before = sideMap(a);
+    const after = sideMap(b);
+    for (const price of new Set([...before.keys(), ...after.keys()])) {
+      if (!inRange(price)) continue;
+      const diff = (after.get(price) ?? 0) - (before.get(price) ?? 0);
+      if (diff >= min) {
+        found.push({ time: next.time, price, side, qty: diff, kind: "muncul" });
+      } else if (-diff >= min) {
+        const eaten = executedAt(price, side, prev.time - 500) >= -diff * 0.5;
+        found.push({ time: next.time, price, side, qty: -diff, kind: eaten ? "termakan" : "ditarik" });
+      }
+    }
+  }
+  if (!found.length) return;
+  found.sort((x, y) => y.qty - x.qty);
+  orderLog = found.concat(orderLog).slice(0, MAX_LOG_ROWS);
+  dirty.log = true;
+}
+
+function renderOrderLog() {
+  if (!orderLog.length) {
+    dom.orderLogList.innerHTML = `<div class="log-empty">menunggu order besar</div>`;
+    return;
+  }
+  const units = lotUnits();
+  dom.orderLogList.innerHTML = orderLog
+    .map((e) => {
+      const time = new Date(e.time).toLocaleTimeString("id-ID", { hour12: false });
+      return `<div class="log-row mono ${e.side === "bids" ? "bid" : "ask"}">` +
+        `<span>${time}</span><span>${fmtAdj(e.price)}</span>` +
+        `<span>${formatNumber(e.qty / units, 2)}</span>` +
+        `<span class="${e.kind}">${e.kind}</span></div>`;
+    })
+    .join("");
+}
 
 function renderOrderBook() {
   const asksTop = orderBookAsks.slice(0, 10).reverse();
@@ -784,6 +858,7 @@ function renderBookmap() {
 setInterval(() => {
   if (dirty.book) { renderOrderBook(); dirty.book = false; }
   if (dirty.tape) { renderTape(); dirty.tape = false; }
+  if (dirty.log) { renderOrderLog(); dirty.log = false; }
   if (dirty.chart) { renderBookmap(); renderVolumeList(); dirty.chart = false; }
 }, 150);
 
